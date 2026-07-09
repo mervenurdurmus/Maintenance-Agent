@@ -6,20 +6,55 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
+BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
     groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
     groq_model: str = Field(default="openai/gpt-oss-120b", alias="GROQ_MODEL")
+    groq_vision_model: str = Field(default="qwen/qwen3.6-27b", alias="GROQ_VISION_MODEL")
+    openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
+    openrouter_model: str = Field(
+        default="openai/gpt-4o-mini",
+        alias="OPENROUTER_MODEL",
+    )
+    ragas_llm_provider: str = Field(default="groq", alias="RAGAS_LLM_PROVIDER")
     embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
+        default="ggml-org/embeddinggemma-300M-GGUF",
         alias="EMBEDDING_MODEL",
     )
-    chroma_persist_dir: Path = Field(default=Path("backend/data/chroma"), alias="CHROMA_PERSIST_DIR")
-    upload_dir: Path = Field(default=Path("backend/data/uploads"), alias="UPLOAD_DIR")
-    top_k: int = Field(default=6, alias="TOP_K")
-    rerank_top_n: int = Field(default=3, alias="RERANK_TOP_N")
-
+    embedding_provider: str = Field(
+        default="llama_server",
+        alias="EMBEDDING_PROVIDER",
+    )
+    embedding_endpoint: str = Field(
+        default="http://127.0.0.1:8080/embedding",
+        alias="EMBEDDING_ENDPOINT",
+    )
+    embedding_timeout_seconds: float = Field(
+        default=60.0,
+        alias="EMBEDDING_TIMEOUT_SECONDS",
+    )
+    embedding_collection_name: str = Field(
+        default="maintenance_documents_embeddinggemma_300m_v1",
+        alias="EMBEDDING_COLLECTION_NAME",
+    )
+    chroma_persist_dir: Path = Field(
+        default=BACKEND_DIR / "data" / "chroma",
+        alias="CHROMA_PERSIST_DIR",
+    )
+    upload_dir: Path = Field(
+        default=BACKEND_DIR / "data" / "uploads",
+        alias="UPLOAD_DIR",
+    )
+    chat_image_dir: Path = Field(
+        default=BACKEND_DIR / "data" / "chat_images",
+        alias="CHAT_IMAGE_DIR",
+    )
+    top_k: int = Field(default=8, alias="TOP_K")
+    rerank_top_n: int = Field(default=4, alias="RERANK_TOP_N")
+    chunk_size: int = Field(default=350, alias="CHUNK_SIZE")
+    chunk_overlap: int = Field(default=50, alias="CHUNK_OVERLAP")
     model_config = SettingsConfigDict(populate_by_name=True)
 
 
@@ -27,5 +62,6 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     settings = Settings()
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    settings.chat_image_dir.mkdir(parents=True, exist_ok=True)
     settings.chroma_persist_dir.mkdir(parents=True, exist_ok=True)
     return settings

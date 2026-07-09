@@ -6,6 +6,8 @@ __pycache__/
 .pytest_cache/
 .ragas_cache/
 backend/.cache/
+backend/chat_history.db
+backend/data/chat_images/*
 backend/backend/data/
 backend/data/uploads/*
 backend/data/chroma/*

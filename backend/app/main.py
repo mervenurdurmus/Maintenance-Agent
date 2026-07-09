@@ -1,9 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
+from app.core.config import get_settings
 
 app = FastAPI(title="Manufacturing Maintenance Agent")
+settings = get_settings()
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,6 +22,16 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.mount(
+    "/chat-images",
+    StaticFiles(directory=settings.chat_image_dir),
+    name="chat-images",
+)
+app.mount(
+    "/uploaded-documents",
+    StaticFiles(directory=settings.upload_dir),
+    name="uploaded-documents",
+)
 
 
 @app.get("/health")

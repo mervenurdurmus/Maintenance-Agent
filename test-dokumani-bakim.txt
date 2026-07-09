@@ -1,0 +1,82 @@
+Uretim Hatti Bakim Test Dokumani
+
+Bu dokuman, Bakim Asistani uygulamasini test etmek icin hazirlanmistir.
+
+Alarm Kodlari
+
+Alarm: E106
+Olası Neden: Motor asiri isiniyor.
+Belirtiler: Motor govdesinde yuksek sicaklik, yanik kokusu, fan sesinde azalma veya motor akiminda artis gorulebilir.
+Cozum Adimlari:
+1. Motoru guvenli sekilde durdur.
+2. Motor sicakligini ve alarm kayitlarini kontrol et.
+3. Sogutma faninin calisip calismadigini kontrol et.
+4. Fan kanallari ve hava filtrelerini temizle.
+5. Motorun asiri yuk altinda calisip calismadigini kontrol et.
+6. Besleme voltajini ve faz dengesini olc.
+7. Kablo ve terminal baglantilarinda gevseklik olup olmadigini kontrol et.
+8. Rulman sicakligini kontrol et.
+9. Gerekirse rulmanlari yagla veya degistir.
+10. Ariza giderildikten sonra motoru tekrar devreye al ve sicaklik takibi yap.
+Guvenlik Uyarisi: Sicak yuzeylere temas etmeyin. Kontrol oncesinde motorun guvenli sicakliga dusmesini bekleyin.
+
+Alarm: P204
+Olası Neden: Hidrolik hat basinci dusuk.
+Belirtiler: Yavas hareket eden silindirler, dusuk basinc degeri veya pompa sesinde degisim gorulebilir.
+Cozum Adimlari:
+1. Hidrolik tank seviyesini kontrol et.
+2. Hortum ve baglanti noktalarinda kacak olup olmadigini incele.
+3. Filtre tikanikligini kontrol et.
+4. Pompa giris ve cikis basincini olc.
+5. Basinc ayar valfinin dogru ayarda oldugunu kontrol et.
+6. Sistem basincini normal degerlere getirdikten sonra test calistirmasi yap.
+Guvenlik Uyarisi: Basincli sistemlerde bakim oncesinde hat basincinin guvenli sekilde tahliye edildiginden emin olun.
+
+Alarm: S310
+Olası Neden: Acil durdurma devresi aktif veya guvenlik kapi anahtari acik.
+Belirtiler: Makine start almaz, guvenlik lambasi yanar veya operator panelinde safety hatasi gorulur.
+Cozum Adimlari:
+1. Acil durdurma butonlarinin basili olup olmadigini kontrol et.
+2. Guvenlik kapilarinin kapali oldugundan emin ol.
+3. Safety role durumunu kontrol et.
+4. Kapi switch kablolarinda kopukluk veya gevseklik olup olmadigini incele.
+5. Sorun giderildikten sonra guvenlik devresini resetle.
+Guvenlik Uyarisi: Guvenlik devrelerini bypass etmeyin. Yetkili bakim personeline haber verin.
+
+Periyodik Bakim Proseduru
+
+Gunluk Bakim:
+- Makine cevresinde yag, su veya kimyasal kacak olup olmadigini kontrol et.
+- Operator panelindeki aktif alarm listesini incele.
+- Hareketli bolgelerde anormal ses veya titresim olup olmadigini dinle.
+- Acil durdurma butonlarinin gorunur ve ulasilabilir oldugunu kontrol et.
+
+Haftalik Bakim:
+- Fan kanallarini ve hava filtrelerini temizle.
+- Kablo tavalarinda gevsek veya zarar gormus kablo olup olmadigini kontrol et.
+- Hidrolik hortumlari catlak, sislik ve kacak acisindan incele.
+- Motor akimlarini nominal degerlerle karsilastir.
+
+Aylik Bakim:
+- Rulmanlari yaglama planina gore yagla.
+- Motor-makine hizalamasini kontrol et.
+- Elektrik panosunda gevsek terminal olup olmadigini kontrol et.
+- Safety switch ve acil durdurma fonksiyon testlerini yap.
+
+Is Guvenligi Talimatlari
+
+Elektrik arizalarinda bakim isleminden once enerjinin kesildiginden ve LOTO prosedurunun uygulandigindan emin olun.
+Hareketli parcalara makine calisirken mudahale etmeyin.
+Yag veya kimyasal kacaklarinda gerekli KKD kullanin ve kaygan zemin riskini izole edin.
+Duman, yanik kokusu veya kivilcim gorulurse makineyi guvenli sekilde durdurun ve enerji beslemesini kesin.
+
+Ornek Soru Cevap Beklentileri
+
+Kullanici: E106 alarmi nedir?
+Beklenen Cevap: Motorun asiri isindigini, fan/filtre/yuk/voltaj/rulman kontrollerini ve sicak yuzey guvenlik uyarisini belirtmelidir.
+
+Kullanici: Hidrolik basinc dusuk ne yapmaliyim?
+Beklenen Cevap: P204 alarmi ile iliskilendirip tank seviyesi, kacak, filtre, pompa ve valf kontrollerini soylemelidir.
+
+Kullanici: Aylik bakimda ne yapilir?
+Beklenen Cevap: Rulman yaglama, hizalama, terminal kontrolu ve safety testlerini kisa sekilde aktarmalidir.

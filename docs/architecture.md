@@ -4,7 +4,7 @@
 
 Manufacturing Maintenance Agent, fabrika bakım ekipleri için tasarlanan kaynaklı cevap verebilen bir AI bakım asistanıdır. Kullanıcı bakım dokümanı, alarm kodları listesi, iş güvenliği talimatı veya periyodik bakım prosedürü yükleyebilir. Sistem bu dokümanları parçalara ayırır, embedding üretir, vector database içine kaydeder ve kullanıcının bakım sorularına kaynak göstererek cevap verir.
 
-Bu projede temel amaç sadece bir chatbot yapmak değildir. Amaç, bakım alanında güvenilir davranan, kaynakta bilgi yoksa uydurmayan, soru tipine göre RAG veya deterministic tool kullanan ve offline olarak Ragas ile ölçülebilen bir AI ürün mimarisi kurmaktır.
+Bu projede temel amaç sadece bir chatbot yapmak değildir. Amaç, bakım alanında güvenilir davranan, kaynakta bilgi yoksa uydurmayan, gerekli aracı LLM'in seçtiği ve offline olarak Ragas ile ölçülebilen bir AI ürün mimarisi kurmaktır.
 
 ## 2. Kapsam
 
@@ -12,10 +12,9 @@ Sistem şu yetenekleri destekleyecek şekilde hazırlandı:
 
 - Doküman yükleme: PDF, TXT, MD ve CSV formatları için temel destek.
 - Doküman işleme: text extraction, chunking, embedding ve ChromaDB indeksleme.
-- Chat API: kullanıcı sorusunu alır, route belirler, RAG veya tool akışını çalıştırır.
-- Agent router: alarm, bakım, güvenlik, tarih ve periyot sorularını ayırır.
+- Chat API: kullanıcı sorusunu LLM kontrollü tool-calling agent'a iletir.
 - Reranking/context filtering: getirilen chunkları tekrar sıralar ve en işe yarar contextleri seçer.
-- Tool calling: tarih ve bakım periyodu gibi hesaplanabilir işlerde deterministic fonksiyon kullanır.
+- Tool calling: LLM; semantic search, tarih ve bakım periyodu araçlarından gerekeni seçer.
 - Kaynaklı cevap: cevapla birlikte doküman adı, chunk id ve skor döner.
 - Offline evaluation: Ragas metrikleri için golden dataset ve rapor yapısı sağlar.
 - Frontend: doküman yükleme, chat ekranı, kaynak paneli ve tool call paneli sunar.
@@ -33,14 +32,14 @@ flowchart LR
     Chunker --> Embedder["Embedding Function"]
     Embedder --> VectorDB["ChromaDB Vector Store"]
 
-    ChatAPI --> Router["Agent Router"]
-    Router -->|Alarm/Bakım/Güvenlik/Genel| Retriever["Retriever"]
+    ChatAPI --> Agent["LLM Tool-Calling Agent"]
+    Agent -->|semantic_search| Retriever["Retriever"]
     Retriever --> VectorDB
     Retriever --> Reranker["Reranker / Context Filter"]
-    Reranker --> Groq["Groq LLM"]
+    Reranker --> Agent
 
-    Router -->|Tarih/Periyot| Tools["Deterministic Tools"]
-    Groq --> Response["Answer + Sources + Route"]
+    Agent -->|Tarih/Periyot| Tools["Deterministic Tools"]
+    Agent --> Response["Answer + Sources + Tool Calls"]
     Tools --> Response
     Response --> Frontend
 ```
@@ -53,7 +52,7 @@ backend/
     api/              FastAPI endpointleri
     core/             ayar ve environment yönetimi
     models/           Pydantic request/response şemaları
-    services/         RAG, router, LLM, reranker ve agent servisleri
+    services/         RAG, LLM, reranker ve agent servisleri
     tools/            deterministic tool fonksiyonları
   data/
     uploads/          yüklenen dokümanlar
@@ -87,8 +86,7 @@ Ana dosyalar:
 - `backend/app/api/routes.py`: `/api/chat` ve `/api/documents/upload` endpointleri.
 - `backend/app/models/schemas.py`: API request/response modelleri.
 - `backend/app/core/config.py`: `.env` ve runtime ayarları.
-- `backend/app/services/agent.py`: LangChain runnable chain ile chat isteğini yöneten ana orchestration katmanı.
-- `backend/app/services/router.py`: soru tipini sınıflandıran agent router.
+- `backend/app/services/agent.py`: LLM tool-calling döngüsünü ve araç çalıştırmayı yöneten katman.
 - `backend/app/services/vector_store.py`: ChromaDB bağlantısı, chunk ekleme ve arama.
 - `backend/app/services/reranker.py`: gelen contextleri tekrar sıralama.
 - `backend/app/services/llm.py`: Groq model çağrısı ve sistem promptu.
@@ -122,17 +120,16 @@ Bu akış RAG sisteminin bilgi tabanını oluşturur. Doküman yüklenmeden RAG 
 
 ## 7. Chat ve Agent Akışı
 
-Kullanıcı soru sorduğunda `POST /api/chat` endpointi çalışır. Endpoint isteği doğrudan `answer_message` fonksiyonuna verir. `answer_message` içinde LangChain `RunnableSequence` tabanlı bir agent zinciri çalışır.
+Kullanıcı soru sorduğunda `POST /api/chat` endpointi çalışır. Endpoint isteği doğrudan `answer_message` fonksiyonuna verir. LLM, kendisine sunulan araç açıklamalarına bakarak araç çağırıp çağırmayacağına karar verir.
 
 Chat akışı:
 
 1. Kullanıcının mesajı alınır.
-2. LangChain chain içindeki route adımı `classify_route` ile soru tipini belirler.
-3. Tool adımı tarih veya periyot gibi deterministik işleri çalıştırır.
-4. Retrieval adımı route RAG gerektiriyorsa ChromaDB üzerinden top-k chunk getirir.
-5. Reranker adımı chunkları soru ile keyword uyumuna göre tekrar sıralar.
-6. Final answer adımı seçilen contextleri veya tool sonucunu Groq modeline gönderir.
-7. Final response içinde answer, sources, tool_calls ve route birlikte döner.
+2. Groq üzerindeki LLM ilk cevabında doğrudan yanıt verebilir veya bir araç çağrısı isteyebilir.
+3. Agent seçilen aracı gerçek argümanlarla çalıştırır ve sonucu LLM'e `ToolMessage` olarak döndürür.
+4. `semantic_search` seçildiyse ChromaDB top-k chunk getirir ve reranker en iyi contextleri seçer.
+5. LLM araç sonucunu değerlendirir; gerekirse başka araç çağırır veya nihai cevabı üretir.
+6. Final response içinde answer, sources ve tool_calls döner.
 
 Response örneği:
 
@@ -146,27 +143,25 @@ Response örneği:
       "score": 0.84
     }
   ],
-  "tool_calls": [],
-  "route": "alarm_question"
+  "tool_calls": [
+    {
+      "name": "semantic_search",
+      "input": {"query": "E42 alarm kodu ne anlama geliyor?"},
+      "output": {"matches": []}
+    }
+  ]
 }
 ```
 
-## 8. Agent Router Tasarımı
+## 8. LLM Tool Seçimi
 
-Router bu projenin karar mekanizmasıdır. LLM'e her şeyi yaptırmak yerine önce soru tipi belirlenir. Böylece sistem daha açıklanabilir olur.
+Sistemde soru tipini önceden belirleyen bir router yoktur. LLM şu araçların adını, açıklamasını ve parametre şemasını görür:
 
-Route tipleri:
+- `semantic_search`: yüklenen bakım dokümanlarında anlamsal arama.
+- `get_today`: bugünün tarihini alma.
+- `calculate_next_maintenance`: son bakım tarihi ve periyottan yeni tarih hesaplama.
 
-| Route | Ne zaman kullanılır? | Çalışan mekanizma |
-| --- | --- | --- |
-| `alarm_question` | Alarm kodu, hata kodu, E42 gibi sorular | RAG |
-| `maintenance_question` | Bakım, yağlama, filtre, kontrol soruları | RAG |
-| `safety_question` | İş güvenliği, PPE, kilitleme etiketleme soruları | RAG |
-| `date_question` | Bugünün tarihi gibi sorular | Tool |
-| `period_calculation` | Sonraki bakım tarihi veya periyot hesabı | Tool |
-| `general_question` | Diğer bakım bağlamlı sorular | RAG |
-
-Bu ayrım case study için önemlidir: Agent router, RAG ve tool calling kavramlarını doğru konumlandırır.
+Model soruyu değerlendirir, gereken aracı çağırır ve araç sonucuna göre nihai cevabı üretir. Araç gerektirmeyen sohbetlerde doğrudan cevap verir.
 
 ## 9. RAG Tasarımı
 
@@ -176,12 +171,13 @@ RAG pipeline:
 
 ```mermaid
 flowchart TD
-    Question["Kullanıcı sorusu"] --> Search["Vector search top-k"]
+    Question["Kullanıcı sorusu"] --> Agent["LLM Agent"]
+    Agent -->|semantic_search seçimi| Search["Vector search top-k"]
     Search --> Contexts["Aday chunklar"]
     Contexts --> Rerank["Reranking / context filtering"]
     Rerank --> Prompt["Prompt + seçilen kaynaklar"]
-    Prompt --> LLM["Groq LLM"]
-    LLM --> Answer["Kaynaklı cevap"]
+    Rerank --> Agent
+    Agent --> Answer["Kaynaklı cevap"]
 ```
 
 RAG katmanında tutulan metadata:
@@ -216,14 +212,15 @@ Prompt kuralları:
 - Cevabı pratik ve kısa tut.
 - Kaynak chunk idlerini anlaşılır şekilde kullan.
 
-Bu tasarımda LLM karar verici tek unsur değildir. Router, retriever, reranker ve tool katmanları LLM'in etrafında güvenlik ve açıklanabilirlik sağlar.
+Bu tasarımda araç seçimini LLM yapar; araçların gerçek çalışması uygulama kodunda kontrollü biçimde yürütülür.
 
 ## 12. Tool Calling Tasarımı
 
-Tool calling bu projede hesaplanabilir ve deterministik işler için kullanılır. Örneğin bugünün tarihini öğrenmek veya belirli bir bakım periyoduna göre sonraki bakım tarihini hesaplamak LLM'e bırakılmaz.
+Tool calling hem doküman araması hem hesaplanabilir işler için kullanılır. LLM hangi aracın gerektiğine karar verir; tarih hesaplama gibi işlemin kendisi yine deterministik Python fonksiyonunda yapılır.
 
 Mevcut tools:
 
+- `semantic_search`: ChromaDB araması yapar ve seçilen chunkları döner.
 - `get_today`: bugünün tarihini ISO formatında döner.
 - `calculate_next_maintenance`: son bakım tarihi ve interval gün sayısından sonraki bakım tarihini hesaplar.
 
@@ -252,8 +249,7 @@ Frontend parçaları:
 - Chat alanı: kullanıcı sorusunu yazar ve asistan cevabını görür.
 - Doküman yükleme: PDF/TXT/MD/CSV dosyası backend'e gönderilir.
 - Sources panel: cevabın dayandığı dokümanları ve chunk idlerini gösterir.
-- Tool call panel: çalışan deterministic tool çağrılarını gösterir.
-- Route bilgisi: agent router'ın hangi karar verdiğini gösterir.
+- Tool call panel: LLM'in seçtiği ve agent'ın çalıştırdığı araçları gösterir.
 
 Ana dosyalar:
 
@@ -304,7 +300,7 @@ Bakım ve iş güvenliği domaininde yanlış bilgi risklidir. Bu yüzden sistem
 - RAG sorularında kaynak yoksa cevap uydurmaz.
 - Prompt modelden sadece verilen context üzerinden cevap istemektedir.
 - Sources response içinde açıkça döner.
-- Tool gerektiren işler LLM yerine deterministic fonksiyonlara verilir.
+- Araç seçimini LLM yapar; hesaplama ve arama uygulama araçlarında kontrollü biçimde çalışır.
 - Evaluation offline olarak Ragas ile ölçülür.
 
 İlk sürümde bu korumalar temel seviyededir. Production seviyesinde ek olarak threshold kontrolü, daha güçlü reranker, kullanıcı yetkilendirmesi, audit log ve doküman versiyonlama eklenmelidir.
@@ -375,9 +371,8 @@ Hazırlanan backend parçaları:
 - ChromaDB vector store katmanı.
 - Basit reranker/context filter.
 - Groq LLM çağrı katmanı.
-- Agent router.
 - Deterministic tool fonksiyonları.
-- Router ve chunker için başlangıç testleri.
+- Agent ve chunker için başlangıç testleri.
 
 Hazırlanan frontend parçaları:
 
@@ -386,7 +381,6 @@ Hazırlanan frontend parçaları:
 - Doküman upload UI.
 - Sources panel.
 - Tool call panel.
-- Route gösterimi.
 - Backend API client.
 
 Hazırlanan evaluation parçaları:
@@ -425,10 +419,25 @@ Sonraki teknik adımlar:
 | ChromaDB kullanımı | Local geliştirme için kolay persistent vector database |
 | Groq kullanımı | Hızlı LLM inference ve case gereksinimiyle uyum |
 | RAG ana mimari | Bakım dokümanlarından kaynaklı cevap üretmek için zorunlu |
-| Tool calling ayrımı | Hesaplanabilir işleri deterministic yapmak için |
+| LLM tool calling | Araç seçimini modele bırakırken gerçek işlemleri kontrollü fonksiyonlarda çalıştırmak için |
 | Ragas offline | Runtime performansını etkilemeden kalite ölçmek için |
 | React frontend | Chat, upload ve panel bazlı ürün ekranını hızlı kurmak için |
 
 ## 22. Kısa Anlatım
 
-Bu projede kullanıcı doküman yükler, backend dokümanı chunklara böler ve ChromaDB içine kaydeder. Kullanıcı soru sorduğunda agent router sorunun tipini belirler. Alarm, bakım ve güvenlik gibi kaynak gerektiren sorularda RAG çalışır; tarih veya bakım periyodu gibi hesaplanabilir sorularda tool çağrılır. Cevap frontend'e answer, sources, tool_calls ve route bilgileriyle döner. Ragas ise canlı sistemde değil, offline evaluation aşamasında kalite ölçümü için kullanılır.
+Bu projede kullanıcı doküman yükler, backend dokümanı chunklara böler ve ChromaDB içine kaydeder. Kullanıcı soru sorduğunda LLM doğrudan cevap vermeye veya semantic search, tarih ya da bakım hesabı araçlarından birini çağırmaya karar verir. Agent aracı çalıştırıp sonucunu LLM'e geri verir. Cevap frontend'e answer, sources ve tool_calls bilgileriyle döner. Ragas ise canlı sistemde değil, offline evaluation aşamasında kalite ölçümü için kullanılır.
+## Ana RAG akışı
+
+Web uygulaması agent tabanlı RAG kullanır:
+
+Kullanıcı sorusu
+→ POST /api/chat
+→ agent.py
+→ LLM araç gerekip gerekmediğine karar verir
+→ Gerekirse semantic_search çağrılır
+→ Chroma ilgili chunk'ları getirir
+→ LLM kaynaklı cevap üretir
+
+`retrieval_chain.py`, `create_retrieval_chain` yapısını öğrenmek ve
+karşılaştırmak için hazırlanmış bir deneydir. Web uygulamasının aktif
+RAG akışında kullanılmaz.

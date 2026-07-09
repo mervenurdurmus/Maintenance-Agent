@@ -1,29 +1,44 @@
-from dataclasses import dataclass
-
+from dataclasses import dataclass, field
+from typing import Any
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 @dataclass(frozen=True)
 class Chunk:
     chunk_id: str
     text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
-def chunk_text(text: str, document_id: str, chunk_size: int = 900, overlap: int = 150) -> list[Chunk]:
-    normalized = " ".join(text.split())
+def chunk_text(
+    text: str,
+    document_id: str,
+    chunk_size: int = 350,
+    overlap: int = 50,
+    metadata: dict[str, Any] | None = None,
+    start_index: int = 1,
+) -> list[Chunk]:
+    normalized = text.strip()
+
     if not normalized:
         return []
 
-    chunks: list[Chunk] = []
-    start = 0
-    index = 1
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+        separators=["\n\n", "\n", ". ", " ", ""],
+        length_function=len,
+    )
 
-    while start < len(normalized):
-        end = min(start + chunk_size, len(normalized))
-        chunk = normalized[start:end].strip()
-        if chunk:
-            chunks.append(Chunk(chunk_id=f"{document_id}_c{index}", text=chunk))
-        if end == len(normalized):
-            break
-        start = max(0, end - overlap)
-        index += 1
+    pieces = splitter.split_text(normalized)
 
-    return chunks
+    return [
+        Chunk(
+            chunk_id=f"{document_id}_c{index}",
+            text=piece,
+            metadata={
+                **(metadata or {}),
+                "chunk_index": index,
+            },
+        )
+        for index, piece in enumerate(pieces, start=start_index)
+    ]
