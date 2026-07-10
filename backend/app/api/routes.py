@@ -6,8 +6,9 @@ from uuid import uuid4
 from tempfile import TemporaryDirectory
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
-from app.core.config import get_settings
+from app.core.config import get_settings, update_runtime_settings
 from app.models.schemas import (
     ChatRequest,
     ChatResponse,
@@ -45,6 +46,67 @@ ALLOWED_CHAT_IMAGE_TYPES = {
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 GOLDEN_DATASET_PATH = PROJECT_ROOT / "evaluation" / "golden" / "golden_dataset.json"
 RAGAS_REPORT_PATH = PROJECT_ROOT / "evaluation" / "reports" / "ragas_report_v1.json"
+
+
+class ChatLlmSettingsRequest(BaseModel):
+    provider: str
+    model: str
+
+
+def _llm_providers(settings) -> list[dict]:
+    return [
+        {
+            "id": "groq",
+            "label": "Groq",
+            "model": settings.groq_model,
+            "configured": bool(settings.groq_api_key),
+            "models": [
+                "openai/gpt-oss-20b",
+                "openai/gpt-oss-120b",
+            ],
+        },
+        {
+            "id": "openrouter",
+            "label": "OpenRouter",
+            "model": settings.openrouter_model,
+            "configured": bool(settings.openrouter_api_key),
+            "models": list(dict.fromkeys([
+                settings.openrouter_model,
+                "google/gemma-4-31b-it:free",
+                "openai/gpt-oss-20b:free",
+            ])),
+        },
+    ]
+
+
+def _active_chat_model(settings) -> str:
+    if settings.chat_llm_model:
+        return settings.chat_llm_model
+    if settings.chat_llm_provider == "openrouter":
+        return settings.openrouter_model
+    return settings.groq_model
+
+
+def _settings_payload(settings) -> dict:
+    providers = _llm_providers(settings)
+    return {
+        "chat_model": _active_chat_model(settings),
+        "vision_model": settings.groq_vision_model,
+        "embedding_model": settings.embedding_model,
+        "top_k": settings.top_k,
+        "rerank_top_n": settings.rerank_top_n,
+        "chunk_size": settings.chunk_size,
+        "chunk_overlap": settings.chunk_overlap,
+        "chat_llm": {
+            "active_provider": settings.chat_llm_provider,
+            "active_model": _active_chat_model(settings),
+            "providers": providers,
+        },
+        "ragas_llm": {
+            "default_provider": settings.ragas_llm_provider,
+            "providers": providers,
+        },
+    }
 
 
 @router.post("/conversations", response_model=ConversationInfo)
@@ -179,40 +241,40 @@ def list_documents() -> list[DocumentInfo]:
 @router.get("/settings")
 def app_settings() -> dict:
     settings = get_settings()
-    return {
-        "chat_model": settings.groq_model,
-        "vision_model": settings.groq_vision_model,
-        "embedding_model": settings.embedding_model,
-        "top_k": settings.top_k,
-        "rerank_top_n": settings.rerank_top_n,
-        "chunk_size": settings.chunk_size,
-        "chunk_overlap": settings.chunk_overlap,
-        "ragas_llm": {
-            "default_provider": settings.ragas_llm_provider,
-            "providers": [
-                {
-                    "id": "groq",
-                    "label": "Groq",
-                    "model": settings.groq_model,
-                    "configured": bool(settings.groq_api_key),
-                    "models": [
-                        "openai/gpt-oss-20b",
-                        "openai/gpt-oss-120b",
-                    ],
-                },
-                {
-                    "id": "openrouter",
-                    "label": "OpenRouter",
-                    "model": settings.openrouter_model,
-                    "configured": bool(settings.openrouter_api_key),
-                    "models": list(dict.fromkeys([
-                        settings.openrouter_model,
-                        "openai/gpt-4o-mini",
-                    ])),
-                },
-            ],
-        },
-    }
+    return _settings_payload(settings)
+
+
+@router.patch("/settings/chat-llm")
+def update_chat_llm_settings(request: ChatLlmSettingsRequest) -> dict:
+    settings = get_settings()
+    providers = {provider["id"]: provider for provider in _llm_providers(settings)}
+
+    if request.provider not in providers:
+        raise HTTPException(
+            status_code=422,
+            detail="Desteklenmeyen LLM provider.",
+        )
+
+    provider = providers[request.provider]
+    if not provider["configured"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{provider['label']} API key tanımlı değil.",
+        )
+
+    if request.model not in provider["models"]:
+        raise HTTPException(
+            status_code=422,
+            detail="Seçilen model bu provider için tanımlı değil.",
+        )
+
+    updated_settings = update_runtime_settings(
+        {
+            "chat_llm_provider": request.provider,
+            "chat_llm_model": request.model,
+        }
+    )
+    return _settings_payload(updated_settings)
 
 
 @router.get("/evaluation/status")
@@ -255,20 +317,7 @@ def evaluation_status() -> dict:
         "expected_sources": dict(expected_sources),
         "ragas_llm": {
             "default_provider": settings.ragas_llm_provider,
-            "providers": [
-                {
-                    "id": "groq",
-                    "label": "Groq",
-                    "model": settings.groq_model,
-                    "configured": bool(settings.groq_api_key),
-                },
-                {
-                    "id": "openrouter",
-                    "label": "OpenRouter",
-                    "model": settings.openrouter_model,
-                    "configured": bool(settings.openrouter_api_key),
-                },
-            ],
+            "providers": _llm_providers(settings),
         },
         "questions": [
             {

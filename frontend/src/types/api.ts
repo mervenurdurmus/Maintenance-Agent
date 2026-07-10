@@ -68,6 +68,11 @@ export type AppSettings = {
   rerank_top_n: number;
   chunk_size: number;
   chunk_overlap: number;
+  chat_llm: {
+    active_provider: "groq" | "openrouter";
+    active_model: string;
+    providers: Array<EvaluationLlmProvider & { models: string[] }>;
+  };
   ragas_llm: {
     default_provider: "groq" | "openrouter";
     providers: Array<EvaluationLlmProvider & { models: string[] }>;

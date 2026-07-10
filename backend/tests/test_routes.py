@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.services import conversation_store
+from app.core import config
 from app.api.routes import router
 from app.core.config import get_settings
 from app.main import app
@@ -77,6 +78,31 @@ def test_chat_requires_a_conversation_id():
     response = client.post("/api/chat", json={"message": "Selam"})
 
     assert response.status_code == 422
+
+
+def test_chat_llm_settings_update_selects_openrouter(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "RUNTIME_SETTINGS_PATH", tmp_path / "runtime_settings.json")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.setenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
+    get_settings.cache_clear()
+
+    client = TestClient(app)
+    response = client.patch(
+        "/api/settings/chat-llm",
+        json={
+            "provider": "openrouter",
+            "model": "google/gemma-4-31b-it:free",
+        },
+    )
+
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["chat_llm"]["active_provider"] == "openrouter"
+    assert payload["chat_llm"]["active_model"] == "google/gemma-4-31b-it:free"
+    assert payload["chat_model"] == "google/gemma-4-31b-it:free"
+
+    get_settings.cache_clear()
 
 
 def test_upload_removes_file_when_embedding_service_fails(

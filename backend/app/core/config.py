@@ -1,5 +1,7 @@
 from functools import lru_cache
+import json
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -7,6 +9,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+RUNTIME_SETTINGS_PATH = BACKEND_DIR / "data" / "runtime_settings.json"
+RUNTIME_SETTING_KEYS = {
+    "chat_llm_provider",
+    "chat_llm_model",
+}
 
 
 class Settings(BaseSettings):
@@ -18,6 +25,8 @@ class Settings(BaseSettings):
         default="openai/gpt-4o-mini",
         alias="OPENROUTER_MODEL",
     )
+    chat_llm_provider: str = Field(default="groq", alias="CHAT_LLM_PROVIDER")
+    chat_llm_model: str = Field(default="", alias="CHAT_LLM_MODEL")
     ragas_llm_provider: str = Field(default="groq", alias="RAGAS_LLM_PROVIDER")
     embedding_model: str = Field(
         default="ggml-org/embeddinggemma-300M-GGUF",
@@ -58,9 +67,52 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(populate_by_name=True)
 
 
+def _load_runtime_settings() -> dict[str, Any]:
+    if not RUNTIME_SETTINGS_PATH.exists():
+        return {}
+
+    try:
+        payload = json.loads(RUNTIME_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    return {
+        key: value
+        for key, value in payload.items()
+        if key in RUNTIME_SETTING_KEYS and isinstance(value, str)
+    }
+
+
+def _apply_runtime_settings(settings: Settings) -> Settings:
+    for key, value in _load_runtime_settings().items():
+        setattr(settings, key, value)
+    return settings
+
+
+def update_runtime_settings(values: dict[str, str]) -> Settings:
+    RUNTIME_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    current = _load_runtime_settings()
+    current.update(
+        {
+            key: value
+            for key, value in values.items()
+            if key in RUNTIME_SETTING_KEYS
+        }
+    )
+    RUNTIME_SETTINGS_PATH.write_text(
+        json.dumps(current, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    get_settings.cache_clear()
+    return get_settings()
+
+
 @lru_cache
 def get_settings() -> Settings:
-    settings = Settings()
+    settings = _apply_runtime_settings(Settings())
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     settings.chat_image_dir.mkdir(parents=True, exist_ok=True)
     settings.chroma_persist_dir.mkdir(parents=True, exist_ok=True)

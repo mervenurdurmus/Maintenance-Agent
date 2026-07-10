@@ -96,3 +96,14 @@ export async function getAppSettings() {
   const response = await api.get<AppSettings>("/settings");
   return response.data;
 }
+
+export async function updateChatLlmSettings(
+  provider: "groq" | "openrouter",
+  model: string,
+) {
+  const response = await api.patch<AppSettings>("/settings/chat-llm", {
+    provider,
+    model,
+  });
+  return response.data;
+}

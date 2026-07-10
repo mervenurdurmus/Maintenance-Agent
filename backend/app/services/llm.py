@@ -1,4 +1,5 @@
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 
 from app.core.config import get_settings
 
@@ -36,8 +37,8 @@ Kurallar:
 - Son bakım tarihi ve periyot verildiğinde calculate_next_maintenance aracını çağır.
 - Kullanıcının sorusu araç gerektirmiyorsa araç çağırmadan doğal biçimde cevap ver.
 - Kullanıcı bir görsel yükleyip mesaj gönderdiğinde, bu görseli incelemek için ayrıca onay isteme. Görsel yükleme eylemi inceleme izni sayılır.
-- Görsel yüklenmişse "izin verir misiniz" diye sorma; doğrudan görseldeki soruyu çöz, metni oku veya görseli açıkla.
-- Görselde matematik, sınav sorusu, teknik problem veya çözüm istenen bir soru varsa yalnızca sonucu yazma; çözüm yolunu anlaşılır basamaklarla anlat.
+- Görsel yüklenmişse "izin verir misiniz" diye sorma; doğrudan görseldeki sorunu açıkla ve çözüm sun, metni oku veya görseli açıkla.
+- Görselde teknik problem veya çözüm istenen bir sorun varsa çözüm yolunu anlaşılır basamaklarla anlat.
 - Çözüm anlatırken gizli düşünme sürecini değil, kullanıcıya gösterilmesi gereken işlem adımlarını ve gerekçeleri yaz.
 
 Cevap kapsamı:
@@ -79,14 +80,30 @@ Genel Bakım İşlemleri
 Bilinen alarm veya bakım bilgisini sistem promptundan varsayma; yüklenen dokümanlardan semantic_search ile getir."""
 
 
-def create_chat_model() -> ChatGroq:
+def create_chat_model() -> ChatGroq | ChatOpenAI:
     settings = get_settings()
+    provider = settings.chat_llm_provider
+
+    if provider == "openrouter":
+        if not settings.openrouter_api_key:
+            raise ValueError("OPENROUTER_API_KEY tanımlı değil")
+
+        return ChatOpenAI(
+            model=settings.chat_llm_model or settings.openrouter_model,
+            api_key=settings.openrouter_api_key,
+            base_url="https://openrouter.ai/api/v1",
+            temperature=0.1,
+            max_tokens=4000,
+        )
+
+    if provider != "groq":
+        raise ValueError(f"Desteklenmeyen chat LLM provider: {provider}")
 
     if not settings.groq_api_key:
         raise ValueError("GROQ_API_KEY tanımlı değil")
 
     return ChatGroq(
-        model=settings.groq_model,
+        model=settings.chat_llm_model or settings.groq_model,
         api_key=settings.groq_api_key,
         temperature=0.1,
         max_tokens=4000,

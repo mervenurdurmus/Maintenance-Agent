@@ -7,6 +7,7 @@ __pycache__/
 .ragas_cache/
 backend/.cache/
 backend/chat_history.db
+backend/data/runtime_settings.json
 backend/data/chat_images/*
 backend/backend/data/
 backend/data/uploads/*

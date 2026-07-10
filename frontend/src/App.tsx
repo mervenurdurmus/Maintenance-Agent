@@ -20,6 +20,7 @@ import {
   listConversations,
   resolveAssetUrl,
   sendMessage,
+  updateChatLlmSettings,
 } from "./api/client";
 import { FileUpload } from "./components/FileUpload";
 import { MarkdownMessage } from "./components/MarkdownMessage";
@@ -105,6 +106,9 @@ export function App() {
   const [evaluationStatus, setEvaluationStatus] = useState<EvaluationStatus | null>(null);
   const [ragasProvider, setRagasProvider] = useState<RagasProvider>("groq");
   const [ragasModel, setRagasModel] = useState("openai/gpt-oss-20b");
+  const [chatProvider, setChatProvider] = useState<RagasProvider>("groq");
+  const [chatModel, setChatModel] = useState("openai/gpt-oss-120b");
+  const [settingsMessage, setSettingsMessage] = useState("");
   const [isEvaluationLoading, setIsEvaluationLoading] = useState(false);
   const [toolCalls, setToolCalls] = useState<HistoryToolCall[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -217,6 +221,8 @@ export function App() {
         );
         setRagasProvider(defaultProvider);
         setRagasModel(defaultProviderInfo?.model ?? settings.chat_model);
+        setChatProvider(settings.chat_llm.active_provider);
+        setChatModel(settings.chat_llm.active_model);
       } catch {
         setAppSettings(null);
       }
@@ -436,12 +442,40 @@ export function App() {
   const selectedModelOptions =
     appSettings?.ragas_llm.providers.find((provider) => provider.id === ragasProvider)?.models ??
     (ragasModel ? [ragasModel] : []);
+  const selectedChatProvider = appSettings?.chat_llm.providers.find(
+    (provider) => provider.id === chatProvider,
+  );
+  const selectedChatModelOptions = selectedChatProvider?.models ?? (chatModel ? [chatModel] : []);
   const ragasCommand = `backend/.venv/bin/python -u evaluation/run_ragas_eval.py \\
   --llm-provider ${ragasProvider} \\
   --eval-model ${ragasModel} \\
   --use-chat-history \\
   --ids q001,q002,q007,q008,q012 \\
   --report evaluation/reports/ragas_report_v1.json`;
+
+  async function applyChatLlmSettings(nextProvider: RagasProvider, nextModel: string) {
+    setSettingsMessage("Ayar uygulanıyor...");
+    setChatProvider(nextProvider);
+    setChatModel(nextModel);
+
+    try {
+      const settings = await updateChatLlmSettings(nextProvider, nextModel);
+      setAppSettings(settings);
+      setChatProvider(settings.chat_llm.active_provider);
+      setChatModel(settings.chat_llm.active_model);
+      setSettingsMessage("Chat modeli güncellendi.");
+    } catch {
+      setSettingsMessage("Ayar uygulanamadı. API key veya backend bağlantısını kontrol et.");
+      try {
+        const settings = await getAppSettings();
+        setAppSettings(settings);
+        setChatProvider(settings.chat_llm.active_provider);
+        setChatModel(settings.chat_llm.active_model);
+      } catch {
+        // Keep the visible selection; the status message already explains the failure.
+      }
+    }
+  }
 
   if (activePage === "home") {
     return (
@@ -721,15 +755,12 @@ export function App() {
                     <section className="settings-group">
                       <h2>LLM provider</h2>
                       <div className="provider-toggle" role="group" aria-label="LLM provider">
-                        {appSettings.ragas_llm.providers.map((provider) => (
+                        {appSettings.chat_llm.providers.map((provider) => (
                           <button
                             type="button"
-                            className={provider.id === ragasProvider ? "provider-option active" : "provider-option"}
+                            className={provider.id === chatProvider ? "provider-option active" : "provider-option"}
                             key={provider.id}
-                            onClick={() => {
-                              setRagasProvider(provider.id);
-                              setRagasModel(provider.model);
-                            }}
+                            onClick={() => void applyChatLlmSettings(provider.id, provider.model)}
                           >
                             <strong>{provider.label}</strong>
                             <span>{provider.model}</span>
@@ -742,10 +773,10 @@ export function App() {
                     <label className="settings-field">
                       <span>Model</span>
                       <select
-                        value={ragasModel}
-                        onChange={(event) => setRagasModel(event.target.value)}
+                        value={chatModel}
+                        onChange={(event) => void applyChatLlmSettings(chatProvider, event.target.value)}
                       >
-                        {Array.from(new Set(selectedModelOptions)).map((model) => (
+                        {Array.from(new Set(selectedChatModelOptions)).map((model) => (
                           <option key={model} value={model}>
                             {model}
                           </option>
@@ -753,9 +784,17 @@ export function App() {
                       </select>
                     </label>
 
+                    {settingsMessage ? (
+                      <p className="provider-note">{settingsMessage}</p>
+                    ) : null}
+
                     <div className="settings-row">
                       <span>Chat modeli</span>
                       <strong>{appSettings.chat_model}</strong>
+                    </div>
+                    <div className="settings-row">
+                      <span>Chat provider</span>
+                      <strong>{appSettings.chat_llm.active_provider}</strong>
                     </div>
                     <div className="settings-row">
                       <span>Vision modeli</span>
