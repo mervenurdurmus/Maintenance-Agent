@@ -1,6 +1,11 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   BarChart3,
+  Bot,
+  CheckCircle2,
+  Database,
+  FileText,
+  Gauge,
   Home,
   ImagePlus,
   MessageSquare,
@@ -8,6 +13,7 @@ import {
   Send,
   Settings,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -50,6 +56,36 @@ type TurnToolSummary = {
 type AppPage = "home" | "chat" | "ragas";
 type RagasProvider = "groq" | "openrouter";
 type ChatSidebarTab = "history" | "settings";
+
+const metricLabels: Record<string, string> = {
+  faithfulness: "Faithfulness",
+  answer_relevancy: "Answer relevancy",
+  context_precision: "Context precision",
+  context_recall: "Context recall",
+};
+
+const metricHints: Record<string, string> = {
+  faithfulness: "Cevap kaynakla uyumlu mu?",
+  answer_relevancy: "Cevap soruya odaklı mı?",
+  context_precision: "Getirilen chunk'lar isabetli mi?",
+  context_recall: "Gerekli bilgi kaçırıldı mı?",
+};
+
+const starterPrompts = [
+  "E106 alarmı nedir?",
+  "Günlük bakımda hangi kontroller yapılır?",
+  "Bugün günlerden ne?",
+  "Kaynakta E999 alarmı var mı?",
+];
+
+function formatScore(score: number | null | undefined) {
+  return typeof score === "number" ? score.toFixed(3) : "Yok";
+}
+
+function scorePercent(score: number | null | undefined) {
+  if (typeof score !== "number") return 0;
+  return Math.max(0, Math.min(100, Math.round(score * 100)));
+}
 
 function formatDateTime(value: string) {
   const date = parseDateTime(value);
@@ -127,8 +163,8 @@ export function App() {
   const latestSources = [...chat]
     .reverse()
     .find((item) => item.metadata?.sources.length)?.metadata?.sources ?? [];
-  const displayedSources = selectedResponse?.sources.length
-    ? selectedResponse.sources
+  const displayedSources = selectedTurnId
+    ? selectedResponse?.sources ?? []
     : latestSources;
   const turnToolSummaries: TurnToolSummary[] = chat.flatMap((item, index) => {
     if (item.role !== "assistant" || !item.turnId) return [];
@@ -446,6 +482,16 @@ export function App() {
     (provider) => provider.id === chatProvider,
   );
   const selectedChatModelOptions = selectedChatProvider?.models ?? (chatModel ? [chatModel] : []);
+  const reportScores = evaluationStatus?.report.scores ?? null;
+  const scoreEntries = reportScores
+    ? Object.entries(reportScores).filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    : [];
+  const averageScore = scoreEntries.length
+    ? scoreEntries.reduce((total, [, score]) => total + score, 0) / scoreEntries.length
+    : null;
+  const lowestMetric = scoreEntries.length
+    ? scoreEntries.reduce((lowest, current) => (current[1] < lowest[1] ? current : lowest))
+    : null;
   const ragasCommand = `backend/.venv/bin/python -u evaluation/run_ragas_eval.py \\
   --llm-provider ${ragasProvider} \\
   --eval-model ${ragasModel} \\
@@ -477,6 +523,12 @@ export function App() {
     }
   }
 
+  function preferredChatModel(providerId: RagasProvider, providerDefaultModel: string) {
+    if (providerId === chatProvider && chatModel) return chatModel;
+    if (providerId === appSettings?.chat_llm.active_provider) return appSettings.chat_llm.active_model;
+    return providerDefaultModel;
+  }
+
   if (activePage === "home") {
     return (
       <main className="launch-shell">
@@ -484,6 +536,7 @@ export function App() {
           <div className="launch-copy">
             <p className="eyebrow">Manufacturing Maintenance Agent</p>
             <h1>Bakım asistanı</h1>
+            <span>Chat ile dokümanlardan cevap al, Ragas ile cevap kalitesini ölç.</span>
           </div>
 
           <div className="launch-actions" aria-label="Ekran seçimi">
@@ -497,6 +550,7 @@ export function App() {
                 <strong>Chat</strong>
                 <small>Bakım dokümanlarıyla soru-cevap</small>
               </span>
+              <em>Kaynaklar, tool çağrıları ve görsel analiz</em>
             </button>
 
             <button
@@ -509,6 +563,7 @@ export function App() {
                 <strong>Ragas</strong>
                 <small>Golden dataset ve metrik ekranı</small>
               </span>
+              <em>Faithfulness, relevancy, precision, recall</em>
             </button>
           </div>
         </section>
@@ -555,21 +610,49 @@ export function App() {
               <>
                 <div className="ragas-stat-grid">
                   <article className="ragas-stat">
+                    <FileText size={17} />
                     <span>Golden dataset</span>
                     <strong>{evaluationStatus.total_questions}</strong>
                     <small>soru</small>
                   </article>
                   <article className="ragas-stat">
+                    <Database size={17} />
                     <span>Kategori</span>
                     <strong>{Object.keys(evaluationStatus.categories).length}</strong>
                     <small>başlık</small>
                   </article>
                   <article className="ragas-stat">
+                    <CheckCircle2 size={17} />
                     <span>Rapor</span>
                     <strong>{evaluationStatus.report.exists ? "Hazır" : "Yok"}</strong>
                     <small>{evaluationStatus.report.path}</small>
                   </article>
                 </div>
+
+                <section className="ragas-section">
+                  <div className="section-heading-row">
+                    <h2>Metrik özeti</h2>
+                    <span>{averageScore === null ? "Rapor bekleniyor" : `Ortalama ${formatScore(averageScore)}`}</span>
+                  </div>
+                  {scoreEntries.length ? (
+                    <div className="metric-grid">
+                      {scoreEntries.map(([name, score]) => (
+                        <article className="metric-card" key={name}>
+                          <div className="metric-card-header">
+                            <strong>{metricLabels[name] ?? name}</strong>
+                            <span>{formatScore(score)}</span>
+                          </div>
+                          <div className="metric-bar" aria-hidden="true">
+                            <span style={{ width: `${scorePercent(score)}%` }} />
+                          </div>
+                          <small>{metricHints[name] ?? "Ragas metriği"}</small>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted-text">Henüz skor okunmadı. Rapor üretince burada görünecek.</p>
+                  )}
+                </section>
 
                 <section className="ragas-section">
                   <h2>Kategoriler</h2>
@@ -617,15 +700,27 @@ export function App() {
                     {reportUpdatedAt ? ` · ${formatDateTime(reportUpdatedAt)}` : ""}
                   </span>
                 </div>
-                {evaluationStatus.report.scores ? (
-                  <div className="ragas-score-list">
-                    {Object.entries(evaluationStatus.report.scores).map(([name, score]) => (
-                      <div className="source-row" key={name}>
-                        <strong>{name}</strong>
-                        <span>{typeof score === "number" ? score.toFixed(3) : "Yok"}</span>
+                {scoreEntries.length ? (
+                  <>
+                    {lowestMetric ? (
+                      <div className="lowest-metric-card">
+                        <Gauge size={18} />
+                        <div>
+                          <span>En düşük metrik</span>
+                          <strong>{metricLabels[lowestMetric[0]] ?? lowestMetric[0]}</strong>
+                          <small>{formatScore(lowestMetric[1])} · {metricHints[lowestMetric[0]]}</small>
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                    ) : null}
+                    <div className="ragas-score-list">
+                      {scoreEntries.map(([name, score]) => (
+                        <div className="source-row compact" key={name}>
+                          <strong>{metricLabels[name] ?? name}</strong>
+                          <span>{formatScore(score)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
                 ) : null}
               </>
             ) : (
@@ -752,6 +847,15 @@ export function App() {
                 </div>
                 {appSettings ? (
                   <div className="settings-list">
+                    <section className="settings-summary-card">
+                      <div>
+                        <Bot size={18} />
+                        <span>Aktif LLM</span>
+                      </div>
+                      <strong>{appSettings.chat_llm.active_provider}</strong>
+                      <small>{appSettings.chat_llm.active_model}</small>
+                    </section>
+
                     <section className="settings-group">
                       <h2>LLM provider</h2>
                       <div className="provider-toggle" role="group" aria-label="LLM provider">
@@ -760,10 +864,10 @@ export function App() {
                             type="button"
                             className={provider.id === chatProvider ? "provider-option active" : "provider-option"}
                             key={provider.id}
-                            onClick={() => void applyChatLlmSettings(provider.id, provider.model)}
+                            onClick={() => void applyChatLlmSettings(provider.id, preferredChatModel(provider.id, provider.model))}
                           >
                             <strong>{provider.label}</strong>
-                            <span>{provider.model}</span>
+                            <span>{preferredChatModel(provider.id, provider.model)}</span>
                             <small>{provider.configured ? "Hazır" : "API key gerekli"}</small>
                           </button>
                         ))}
@@ -840,8 +944,23 @@ export function App() {
               <section className="chat-window" ref={chatWindowRef}>
                 {chat.length === 0 ? (
                   <div className="empty-state">
+                    <Bot size={24} />
                     <strong>Alarm, bakım, güvenlik veya tarih sorusu sor.</strong>
-                    <span>Örnek: E42 alarm kodu ne anlama geliyor?</span>
+                    <span>Doküman yüklüyse kaynaklı cevap, gerekirse tool çağrısı görürsün.</span>
+                    <div className="starter-prompts" aria-label="Örnek sorular">
+                      {starterPrompts.map((prompt) => (
+                        <button
+                          type="button"
+                          key={prompt}
+                          onClick={() => {
+                            setMessage(prompt);
+                            window.setTimeout(() => messageInputRef.current?.focus(), 0);
+                          }}
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   chat.map((item, index) => {
@@ -976,21 +1095,49 @@ export function App() {
                 <>
                   <div className="ragas-stat-grid">
                     <article className="ragas-stat">
+                      <FileText size={17} />
                       <span>Golden dataset</span>
                       <strong>{evaluationStatus.total_questions}</strong>
                       <small>soru</small>
                     </article>
                     <article className="ragas-stat">
+                      <Database size={17} />
                       <span>Kategori</span>
                       <strong>{Object.keys(evaluationStatus.categories).length}</strong>
                       <small>başlık</small>
                     </article>
                     <article className="ragas-stat">
+                      <CheckCircle2 size={17} />
                       <span>Rapor</span>
                       <strong>{evaluationStatus.report.exists ? "Hazır" : "Yok"}</strong>
                       <small>{evaluationStatus.report.path}</small>
                     </article>
                   </div>
+
+                  <section className="ragas-section">
+                    <div className="section-heading-row">
+                      <h2>Metrik özeti</h2>
+                      <span>{averageScore === null ? "Rapor bekleniyor" : `Ortalama ${formatScore(averageScore)}`}</span>
+                    </div>
+                    {scoreEntries.length ? (
+                      <div className="metric-grid">
+                        {scoreEntries.map(([name, score]) => (
+                          <article className="metric-card" key={name}>
+                            <div className="metric-card-header">
+                              <strong>{metricLabels[name] ?? name}</strong>
+                              <span>{formatScore(score)}</span>
+                            </div>
+                            <div className="metric-bar" aria-hidden="true">
+                              <span style={{ width: `${scorePercent(score)}%` }} />
+                            </div>
+                            <small>{metricHints[name] ?? "Ragas metriği"}</small>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted-text">Henüz skor okunmadı. Rapor üretince burada görünecek.</p>
+                    )}
+                  </section>
 
                   <section className="ragas-section">
                     <h2>Kategoriler</h2>
@@ -1046,7 +1193,11 @@ export function App() {
               </div>
             ))
           ) : (
-            <p>Kaynak bulunmadı.</p>
+            <div className="panel-empty">
+              <Database size={18} />
+              <p>Kaynak bulunmadı.</p>
+              <span>Bakım sorularında cevap kaynakla gelmelidir; kaynak yoksa bot uydurmamalıdır.</span>
+            </div>
           )}
         </section>
 
@@ -1084,7 +1235,11 @@ export function App() {
                 ))}
               </div>
             ) : (
-              <p>Bu cevap için tool çağrısı yok.</p>
+              <div className="panel-empty">
+                <Wrench size={18} />
+                <p>Bu cevap için tool çağrısı yok.</p>
+                <span>RAG, tarih veya bakım tool'u gerekmediyse boş kalır.</span>
+              </div>
             )
           ) : turnToolSummaries.length ? (
             <div className="tool-call-list">
@@ -1131,15 +1286,27 @@ export function App() {
                       {reportUpdatedAt ? ` · ${formatDateTime(reportUpdatedAt)}` : ""}
                     </span>
                   </div>
-                  {evaluationStatus.report.scores ? (
-                    <div className="ragas-score-list">
-                      {Object.entries(evaluationStatus.report.scores).map(([name, score]) => (
-                        <div className="source-row" key={name}>
-                          <strong>{name}</strong>
-                          <span>{typeof score === "number" ? score.toFixed(3) : "Yok"}</span>
+                  {scoreEntries.length ? (
+                    <>
+                      {lowestMetric ? (
+                        <div className="lowest-metric-card">
+                          <Gauge size={18} />
+                          <div>
+                            <span>En düşük metrik</span>
+                            <strong>{metricLabels[lowestMetric[0]] ?? lowestMetric[0]}</strong>
+                            <small>{formatScore(lowestMetric[1])} · {metricHints[lowestMetric[0]]}</small>
+                          </div>
                         </div>
-                      ))}
-                    </div>
+                      ) : null}
+                      <div className="ragas-score-list">
+                        {scoreEntries.map(([name, score]) => (
+                          <div className="source-row compact" key={name}>
+                            <strong>{metricLabels[name] ?? name}</strong>
+                            <span>{formatScore(score)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   ) : null}
                 </>
               ) : (

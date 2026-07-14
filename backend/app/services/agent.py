@@ -44,6 +44,86 @@ Kurallar:
 JSON formatı:
 {"relevant_chunk_ids": ["chunk_id_1", "chunk_id_2"]}
 """
+GENERAL_CHAT_PROMPT = """Sen aynı uygulama içindeki kısa sohbet yardımcısısın.
+
+Kurallar:
+- Her zaman kullanıcının son mesajıyla aynı dilde cevap ver.
+- Kimliğin genel amaçlı chatbot değil, fabrika bakım ekipleri için tasarlanmış Bakım Asistanı'dır.
+- Bu akışta doküman arama, bakım kaynağı veya tool kullanımı yoktur.
+- Bakım, alarm, arıza, makine, güvenlik, doküman, kaynak veya tarih hesabı sorularına burada cevap verme; bunlar ana bakım ajanına yönlendirilir.
+- Genel sohbet, selamlaşma, kısa sosyal ifade veya basit günlük dil sorularına doğal ve kısa cevap ver.
+- Kullanıcı "birine ne denir", "ne söylenir", "nasıl karşılık verilir" gibi günlük dil sorarsa kişiyi etiketleme; söylenmesi beklenen kalıp ifadeyi cevapla.
+- Kullanıcı "ne sorabilirim", "ne yapabilirsin" gibi yetenek sorusu sorarsa uygulama kapsamını anlat: bakım dokümanları, alarm kodları, güvenlik talimatları, periyodik bakım, bakım tarihi hesaplama, kaynaklı cevap ve görsel/doküman inceleme.
+- Kullanıcı kaba, hakaret içeren veya sabırsız bir mesaj yazarsa tartışmaya girme; kısa, sakin ve doğal cevap ver.
+- Aynı kalıbı art arda tekrar etme.
+- Uydurma bakım prosedürü, alarm anlamı veya kaynak bilgisi verme.
+"""
+DOMAIN_KEYWORDS = (
+    "bakım",
+    "bakim",
+    "alarm",
+    "arıza",
+    "ariza",
+    "makine",
+    "makina",
+    "motor",
+    "hidrolik",
+    "pnömatik",
+    "pnomatik",
+    "güvenlik",
+    "guvenlik",
+    "loto",
+    "prosedür",
+    "prosedur",
+    "periyodik",
+    "doküman",
+    "dokuman",
+    "kaynak",
+    "pdf",
+    "chunk",
+    "rag",
+    "embedding",
+    "vektör",
+    "vektor",
+    "chroma",
+    "qdrant",
+    "faiss",
+    "ragas",
+)
+DATE_KEYWORDS = (
+    "bugün",
+    "bugun",
+    "yarın",
+    "yarin",
+    "dün",
+    "dun",
+    "tarih",
+    "haftanın",
+    "haftanin",
+    "günlerden",
+    "gunlerden",
+    "kaç gün",
+    "kac gun",
+    "sonraki",
+)
+QUESTION_MARKERS = (
+    "?",
+    " ne ",
+    " nedir",
+    " nasıl",
+    " nasil",
+    " neden",
+    " niye",
+    " hangi",
+    " kaç",
+    " kac",
+    " mı",
+    " mi",
+    " mu",
+    " mü",
+    " yapmalıyım",
+    " yapmaliyim",
+)
 ABSENCE_EVIDENCE_TERMS = (
     "alarm kodlari",
     "alarm kodları",
@@ -68,6 +148,10 @@ AGENT_PROMPT = ChatPromptTemplate.from_messages(
 @tool
 def semantic_search(query: str) -> dict[str, Any]:
     """Bakım, alarm ve iş güvenliği soruları için yüklenen dokümanlarda anlamsal arama yapar."""
+    return _run_semantic_search(query)
+
+
+def _run_semantic_search(query: str) -> dict[str, Any]:
     settings = get_settings()
     # Retrieve a wider candidate set, then compress it to the most relevant chunks.
     matches = get_vector_store().search(query, top_k=settings.top_k)
@@ -120,6 +204,10 @@ def answer_message(
         ensure_conversation(conversation_id, title_candidate=message)
     history = get_chat_history(conversation_id) if conversation_id else None
 
+    if not attachments and not _should_use_agent(message) and not _history_has_domain_context(history):
+        response = _answer_general_message(message, history, conversation_id)
+        return response
+
     try:
         model = create_chat_model()
         agent = create_tool_calling_agent(model, TOOLS, AGENT_PROMPT)
@@ -143,6 +231,20 @@ def answer_message(
     recorded_calls: list[ToolCall] = []
     sources: list[Source] = []
     turn_id = f"turn_{uuid4().hex}"
+    source_decision_message = _source_decision_message(message, image_descriptions or [])
+
+    if _should_pre_search(source_decision_message):
+        search_output = _run_semantic_search(source_decision_message)
+        recorded_calls.append(
+            ToolCall(
+                name="semantic_search",
+                input={"query": source_decision_message},
+                output=_public_tool_output("semantic_search", search_output),
+                turn_id=turn_id,
+            )
+        )
+        sources = _merge_sources(sources, _sources_from_search(search_output))
+        agent_message = _append_document_search_context(agent_message, search_output)
 
     try:
         result = agent_executor.invoke(
@@ -166,11 +268,18 @@ def answer_message(
             )
 
             if action.tool == "semantic_search":
-                sources = _sources_from_search(tool_output)
+                sources = _merge_sources(sources, _sources_from_search(tool_output))
 
         answer = _final_answer_text(
             result.get("output", ""),
             message,
+            has_attachments=bool(attachments),
+        )
+        answer = _guard_document_answer_without_sources(
+            answer=answer,
+            user_message=source_decision_message,
+            sources=sources,
+            tool_calls=recorded_calls,
             has_attachments=bool(attachments),
         )
         chat_response = ChatResponse(
@@ -245,6 +354,81 @@ def _record_turn(
     )
     if conversation_id and tool_calls:
         save_tool_calls(conversation_id, tool_calls, turn_id=turn_id)
+
+
+def _should_use_agent(message: str) -> bool:
+    normalized = message.casefold()
+    if re.search(r"\b[A-ZÇĞİÖŞÜ]{1,4}\d{2,4}\b", message, flags=re.IGNORECASE):
+        return True
+
+    if any(keyword in normalized for keyword in DOMAIN_KEYWORDS):
+        return True
+
+    if any(keyword in normalized for keyword in DATE_KEYWORDS):
+        return True
+
+    if _looks_like_question(message):
+        return True
+
+    return False
+
+
+def _looks_like_question(message: str) -> bool:
+    normalized = f" {message.casefold().strip()} "
+    return any(marker in normalized for marker in QUESTION_MARKERS)
+
+
+def _should_pre_search(message: str) -> bool:
+    if _is_date_only_question(message):
+        return False
+    return _looks_like_question(message) or _requires_document_sources(message)
+
+
+def _is_date_only_question(message: str) -> bool:
+    normalized = message.casefold()
+    return any(keyword in normalized for keyword in DATE_KEYWORDS) and not _requires_document_sources(message)
+
+
+def _history_has_domain_context(history: BaseChatMessageHistory | None) -> bool:
+    if history is None:
+        return False
+
+    recent_messages = list(history.messages)[-4:]
+    return any(_should_use_agent(_message_text(message.content)) for message in recent_messages)
+
+
+def _answer_general_message(
+    message: str,
+    history: BaseChatMessageHistory | None,
+    conversation_id: str | None,
+) -> ChatResponse:
+    turn_id = f"turn_{uuid4().hex}"
+
+    try:
+        model = create_chat_model()
+        chat_history = list(history.messages)[-6:] if history else []
+        response = model.invoke(
+            [
+                SystemMessage(content=GENERAL_CHAT_PROMPT),
+                *chat_history,
+                HumanMessage(content=message),
+            ]
+        )
+        answer = _message_text(response.content).strip() or "Cevap oluşturulamadı. Soruyu tekrar yazar mısın?"
+    except Exception as exc:
+        chat_response = _error_response(exc, turn_id=turn_id)
+        _record_turn(history, message, chat_response.answer, conversation_id, turn_id=turn_id)
+        return chat_response
+
+    chat_response = ChatResponse(
+        answer=answer,
+        sources=[],
+        tool_calls=[],
+        turn_id=turn_id,
+        attachments=[],
+    )
+    _record_turn(history, message, answer, conversation_id, [], turn_id, [])
+    return chat_response
 
 
 def _filter_relevant_contexts(query: str, contexts: list[dict]) -> list[dict]:
@@ -369,6 +553,106 @@ def _sources_from_search(output: dict[str, Any]) -> list[Source]:
     return sources
 
 
+def _merge_sources(existing: list[Source], incoming: list[Source]) -> list[Source]:
+    seen_chunk_ids = {source.chunk_id for source in existing}
+    merged = [*existing]
+    for source in incoming:
+        if source.chunk_id in seen_chunk_ids:
+            continue
+        seen_chunk_ids.add(source.chunk_id)
+        merged.append(source)
+    return merged
+
+
+def _guard_document_answer_without_sources(
+    answer: str,
+    user_message: str,
+    sources: list[Source],
+    tool_calls: list[ToolCall],
+    has_attachments: bool,
+) -> str:
+    if sources:
+        return answer
+
+    if has_attachments and not _requires_document_sources(user_message):
+        return answer
+
+    normalized_answer = answer.casefold()
+    if (
+        "kaynakta olmayan" in normalized_answer
+        or "dokümanında" in normalized_answer
+        or "dokumaninda" in normalized_answer
+        or "araçları kullanırken karar döngüsünü tamamlayamadım" in normalized_answer
+    ):
+        return answer
+
+    if not _requires_document_sources(user_message):
+        return answer
+
+    if any(tool_call.name in {"get_today", "date_info", "calculate_next_maintenance"} for tool_call in tool_calls):
+        return answer
+
+    return _document_absence_answer(user_message)
+
+
+def _requires_document_sources(user_message: str) -> bool:
+    normalized = user_message.casefold()
+    if any(keyword in normalized for keyword in DATE_KEYWORDS):
+        return False
+
+    if re.search(r"\b[A-ZÇĞİÖŞÜ]{1,4}\d{2,4}\b", user_message, flags=re.IGNORECASE):
+        return True
+
+    document_required_keywords = (
+        "bakım",
+        "bakim",
+        "alarm",
+        "arıza",
+        "ariza",
+        "makine",
+        "makina",
+        "motor",
+        "hidrolik",
+        "pnömatik",
+        "pnomatik",
+        "güvenlik",
+        "guvenlik",
+        "loto",
+        "prosedür",
+        "prosedur",
+        "periyodik",
+        "doküman",
+        "dokuman",
+        "kaynak",
+        "manual",
+        "manuel",
+        "servis",
+        "çamaşır",
+        "camasir",
+        "ısıtıcı",
+        "isitici",
+        "rezistans",
+        "temizlik",
+        "temizleme",
+    )
+    return any(keyword in normalized for keyword in document_required_keywords)
+
+
+def _document_absence_answer(user_message: str) -> str:
+    alarm_match = re.search(r"\b([A-ZÇĞİÖŞÜ]{1,4}\d{2,4})\b", user_message, flags=re.IGNORECASE)
+    if alarm_match:
+        code = alarm_match.group(1).upper()
+        return (
+            f"Verilen bakım dokümanında {code} için kaynak bulunamadı. "
+            "Kaynakta olmayan bir bakım cevabı uyduramam."
+        )
+
+    return (
+        "Verilen bakım dokümanlarında bu soruyu cevaplayacak kaynak bulunamadı. "
+        "Kaynakta olmayan bir bakım cevabı uyduramam."
+    )
+
+
 def _public_tool_output(name: str, output: dict[str, Any]) -> dict[str, Any]:
     if name != "semantic_search" or "matches" not in output:
         return output
@@ -407,9 +691,10 @@ def _message_with_attachment_context(
             f"{message}\n\n"
             f"Kullanıcı şu görsel eklerini gönderdi: {attachment_names}.\n"
             "Görsel yükleme eylemi inceleme izni sayılır; kullanıcıdan tekrar izin isteme.\n"
-            "Eğer mesaj boş veya genel ise görseldeki soruyu/konuyu doğrudan çöz veya açıkla.\n"
-            "Görselde çözülmesi gereken bir soru varsa çözümü adım adım anlat; sadece nihai cevabı verme.\n"
-            f"Görselden okunan bilgi:\n{image_context}"
+            "Aşağıdaki metin vision modelinin yalnızca görsel gözlemidir; bunu nihai cevap gibi kabul etme.\n"
+            "Bakım, arıza, güvenlik, temizlik veya prosedür cevabı vereceksen bu görsel analiz metniyle dokümanlarda yapılan semantic_search sonuçlarına dayan.\n"
+            "İlgili doküman kaynağı yoksa görselden veya genel bilgiden bakım prosedürü uydurma.\n"
+            f"Görsel analiz metni:\n{image_context}"
         )
 
     return (
@@ -418,6 +703,49 @@ def _message_with_attachment_context(
         "Bu çalışma modunda görsel dosya sohbete eklenir ve geçmişte saklanır; "
         "görselin piksel içeriğini analiz etmek için vision destekli model gerekir. "
         "Eğer kullanıcı görselin içeriğini analiz etmeni isterse bunu açıkça belirt."
+    )
+
+
+def _source_decision_message(message: str, image_descriptions: list[str]) -> str:
+    if not image_descriptions:
+        return message
+
+    image_context = "\n".join(image_descriptions)
+    return (
+        f"{message}\n\n"
+        "Görsel analiz metni:\n"
+        f"{image_context}"
+    )
+
+
+def _append_document_search_context(agent_message: str, search_output: dict[str, Any]) -> str:
+    matches = search_output.get("matches", [])
+    if not matches:
+        return (
+            f"{agent_message}\n\n"
+            "Görsel analiz metniyle dokümanlarda semantic_search yapıldı ancak ilgili kaynak bulunamadı. "
+            "Bu bakım, güvenlik veya prosedür sorusuysa kaynakta olmayan bakım cevabı uydurma."
+        )
+
+    context_lines = []
+    for match in matches:
+        metadata = match.get("metadata", {})
+        context_lines.append(
+            "\n".join(
+                [
+                    f"- Kaynak: {metadata.get('document_name', 'unknown')}",
+                    f"  chunk_id: {metadata.get('chunk_id', '')}",
+                    f"  sayfa: {metadata.get('page_number', 'bilinmiyor')}",
+                    f"  metin: {str(match.get('text', '')).strip()}",
+                ]
+            )
+        )
+
+    return (
+        f"{agent_message}\n\n"
+        "Görsel analiz metniyle dokümanlarda semantic_search yapıldı. "
+        "Cevabını sadece aşağıdaki ilgili kaynaklara dayandır:\n"
+        f"{chr(10).join(context_lines)}"
     )
 
 
@@ -508,10 +836,15 @@ def _error_response(
     attachments: list[ImageAttachment] | None = None,
 ) -> ChatResponse:
     message = str(exc)
-    if "api key" in message.lower() or "groq_api_key" in message.lower():
+    normalized_message = message.lower()
+    if "openrouter_api_key" in normalized_message or "openrouter" in normalized_message and "api" in normalized_message and "key" in normalized_message:
+        answer = "OpenRouter API anahtarı tanımlı değil. backend/.env içinde OPENROUTER_API_KEY girilmelidir."
+    elif "api key" in normalized_message or "groq_api_key" in normalized_message:
         answer = "Groq API anahtarı tanımlı değil. backend/.env içinde GROQ_API_KEY girilmelidir."
     else:
-        answer = f"Groq API hatası: {message}"
+        provider = get_settings().chat_llm_provider
+        provider_label = "OpenRouter" if provider == "openrouter" else "Groq"
+        answer = f"{provider_label} API hatası: {message}"
 
     return ChatResponse(
         answer=answer,

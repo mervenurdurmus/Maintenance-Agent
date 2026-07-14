@@ -54,11 +54,12 @@ class ChatLlmSettingsRequest(BaseModel):
 
 
 def _llm_providers(settings) -> list[dict]:
+    active_model = _active_chat_model(settings)
     return [
         {
             "id": "groq",
             "label": "Groq",
-            "model": settings.groq_model,
+            "model": active_model if settings.chat_llm_provider == "groq" else settings.groq_model,
             "configured": bool(settings.groq_api_key),
             "models": [
                 "openai/gpt-oss-20b",
@@ -68,9 +69,10 @@ def _llm_providers(settings) -> list[dict]:
         {
             "id": "openrouter",
             "label": "OpenRouter",
-            "model": settings.openrouter_model,
+            "model": active_model if settings.chat_llm_provider == "openrouter" else settings.openrouter_model,
             "configured": bool(settings.openrouter_api_key),
             "models": list(dict.fromkeys([
+                active_model if settings.chat_llm_provider == "openrouter" else settings.openrouter_model,
                 settings.openrouter_model,
                 "google/gemma-4-31b-it:free",
                 "openai/gpt-oss-20b:free",

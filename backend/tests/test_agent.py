@@ -6,18 +6,18 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.models.schemas import ImageAttachment
 from app.services.agent import (
+    GENERAL_CHAT_PROMPT,
+    _message_with_attachment_context,
     _filter_relevant_contexts,
     answer_message,
 )
+from app.services.vision import VISION_PROMPT
 
 
-def test_llm_can_answer_without_selecting_a_tool() -> None:
+def test_general_message_uses_short_chat_flow() -> None:
     model = MagicMock()
+    model.invoke.return_value = SimpleNamespace(content="Merhaba!")
     executor = MagicMock()
-    executor.invoke.return_value = {
-        "output": "Merhaba!",
-        "intermediate_steps": [],
-    }
 
     with (
         patch("app.services.agent.create_chat_model", return_value=model),
@@ -29,6 +29,53 @@ def test_llm_can_answer_without_selecting_a_tool() -> None:
     assert response.answer == "Merhaba!"
     assert response.tool_calls == []
     assert response.sources == []
+    model.invoke.assert_called_once()
+    executor.invoke.assert_not_called()
+
+
+def test_general_chat_prompt_keeps_domain_questions_out() -> None:
+    assert "söylenmesi beklenen kalıp ifadeyi" in GENERAL_CHAT_PROMPT
+    assert "Bakım, alarm, arıza, makine" in GENERAL_CHAT_PROMPT
+    assert "ana bakım ajanına yönlendirilir" in GENERAL_CHAT_PROMPT
+    assert "Uydurma bakım prosedürü" in GENERAL_CHAT_PROMPT
+
+
+def test_abusive_message_uses_short_chat_flow() -> None:
+    model = MagicMock()
+    model.invoke.return_value = SimpleNamespace(content="Kısa geçiyorum. Ne yapmamı istersin?")
+    executor = MagicMock()
+
+    with (
+        patch("app.services.agent.create_chat_model", return_value=model),
+        patch("app.services.agent.create_tool_calling_agent", return_value=MagicMock()),
+        patch("app.services.agent.AgentExecutor", return_value=executor),
+    ):
+        response = answer_message("beyinsizsin ki")
+
+    assert response.answer == "Kısa geçiyorum. Ne yapmamı istersin?"
+    assert response.tool_calls == []
+    assert response.sources == []
+    model.invoke.assert_called_once()
+    executor.invoke.assert_not_called()
+
+
+def test_impatient_message_uses_short_chat_flow() -> None:
+    model = MagicMock()
+    model.invoke.return_value = SimpleNamespace(content="Uzatmıyorum. Ne yapmamı istersin?")
+    executor = MagicMock()
+
+    with (
+        patch("app.services.agent.create_chat_model", return_value=model),
+        patch("app.services.agent.create_tool_calling_agent", return_value=MagicMock()),
+        patch("app.services.agent.AgentExecutor", return_value=executor),
+    ):
+        response = answer_message("bozuk plağa bağlandın he")
+
+    assert response.answer == "Uzatmıyorum. Ne yapmamı istersin?"
+    assert response.tool_calls == []
+    assert response.sources == []
+    model.invoke.assert_called_once()
+    executor.invoke.assert_not_called()
 
 
 def test_empty_model_output_returns_fallback_for_image() -> None:
@@ -82,6 +129,82 @@ def test_absence_answer_mentions_requested_alarm_code() -> None:
     )
 
 
+def test_domain_answer_without_sources_is_blocked() -> None:
+    model = MagicMock()
+    executor = MagicMock()
+    executor.invoke.return_value = {
+        "output": "Öncelikle makinenin enerjisini kesin ve yetkili servise haber verin.",
+        "intermediate_steps": [],
+    }
+
+    with (
+        patch("app.services.agent.create_chat_model", return_value=model),
+        patch("app.services.agent.create_tool_calling_agent", return_value=MagicMock()),
+        patch("app.services.agent.AgentExecutor", return_value=executor),
+        patch("app.services.agent._run_semantic_search", return_value={"matches": []}),
+    ):
+        response = answer_message("çamaşır makinem hareket ediyor ne yapmalıyım")
+
+    assert response.answer == (
+        "Verilen bakım dokümanlarında bu soruyu cevaplayacak kaynak bulunamadı. "
+        "Kaynakta olmayan bir bakım cevabı uyduramam."
+    )
+    assert response.sources == []
+
+
+def test_maintenance_image_runs_vector_search_before_absence_decision() -> None:
+    model = MagicMock()
+    executor = MagicMock()
+    executor.invoke.return_value = {
+        "output": "Isıtıcı elemanı enerjiyi kesip temizleyin.",
+        "intermediate_steps": [],
+    }
+    attachment = ImageAttachment(
+        filename="isitici.png",
+        content_type="image/png",
+        url="/chat-images/isitici.png",
+    )
+
+    with (
+        patch("app.services.agent.create_chat_model", return_value=model),
+        patch("app.services.agent.create_tool_calling_agent", return_value=MagicMock()),
+        patch("app.services.agent.AgentExecutor", return_value=executor),
+        patch("app.services.agent._run_semantic_search", return_value={"matches": []}) as search,
+    ):
+        response = answer_message(
+            "Görsel eklendi.",
+            attachments=[attachment],
+            image_descriptions=["Çamaşır makinesinde kireçlenmiş ısıtıcı eleman görünüyor."],
+        )
+
+    search.assert_called_once()
+    assert response.tool_calls[0].name == "semantic_search"
+    assert response.sources == []
+    assert response.answer == (
+        "Verilen bakım dokümanlarında bu soruyu cevaplayacak kaynak bulunamadı. "
+        "Kaynakta olmayan bir bakım cevabı uyduramam."
+    )
+
+
+def test_vision_model_only_extracts_observations_for_main_agent() -> None:
+    attachment = ImageAttachment(
+        filename="isitici.png",
+        content_type="image/png",
+        url="/chat-images/isitici.png",
+    )
+
+    agent_message = _message_with_attachment_context(
+        "Görsel eklendi.",
+        [attachment],
+        ["Çamaşır makinesinde kireçlenmiş ısıtıcı eleman görünüyor."],
+    )
+
+    assert "Bakım, arıza, güvenlik, temizlik veya prosedür çözümü verme" in VISION_PROMPT
+    assert "son kullanıcı cevabı değildir" in VISION_PROMPT
+    assert "yalnızca görsel gözlemidir" in agent_message
+    assert "semantic_search sonuçlarına dayan" in agent_message
+
+
 def test_agent_iteration_stop_message_is_localized_to_turkish() -> None:
     model = MagicMock()
     executor = MagicMock()
@@ -131,6 +254,7 @@ def test_llm_can_select_semantic_search() -> None:
         patch("app.services.agent.create_chat_model", return_value=model),
         patch("app.services.agent.create_tool_calling_agent", return_value=MagicMock()),
         patch("app.services.agent.AgentExecutor", return_value=executor),
+        patch("app.services.agent._run_semantic_search", return_value={"matches": []}),
     ):
         response = answer_message("P204 alarmı nedir?")
 
@@ -159,6 +283,7 @@ def test_answer_uses_and_updates_langchain_chat_history() -> None:
         patch("app.services.agent.AgentExecutor", return_value=executor),
         patch("app.services.agent.ensure_conversation"),
         patch("app.services.agent.get_chat_history", return_value=history),
+        patch("app.services.agent._run_semantic_search", return_value={"matches": []}),
     ):
         response = answer_message("Başka ne yapmalıyım?", conversation_id="session-1")
 
@@ -167,7 +292,8 @@ def test_answer_uses_and_updates_langchain_chat_history() -> None:
         "P204 nedir?",
         "Hidrolik basınç alarmıdır.",
     ]
-    assert invoke_payload["input"] == "Başka ne yapmalıyım?"
+    assert invoke_payload["input"].startswith("Başka ne yapmalıyım?")
+    assert "semantic_search yapıldı" in invoke_payload["input"]
     assert response.answer == "Filtreyi de kontrol et."
     assert [message.content for message in history.messages[-2:]] == [
         "Başka ne yapmalıyım?",

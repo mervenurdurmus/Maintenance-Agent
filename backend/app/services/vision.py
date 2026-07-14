@@ -13,11 +13,12 @@ Kurallar:
 - Görselde görünen yazıları, alarm kodlarını, hata mesajlarını, ekipman/arayüz bilgilerini çıkar.
 - Emin olmadığın şeyi kesin bilgi gibi yazma.
 - Görselde bir soru, test maddesi, matematik işlemi veya çözülmesi istenen problem varsa soruyu tam olarak oku; sadece sonucu değil çözüm için gereken ifadeleri de çıkar.
-- Kullanıcının çözüm istediği görsellerde nihai cevabı verirken çözüm basamaklarını anlaşılır şekilde göster.
-- Görsel sadece bilgi içeriyorsa kısa ama kullanışlı bir Türkçe özet ver.
+- Bakım, arıza, güvenlik, temizlik veya prosedür çözümü verme; yalnızca görselde ne göründüğünü ve okunabilen metni aktar.
+- Görsel sadece bilgi içeriyorsa kısa ama kullanışlı bir Türkçe gözlem özeti ver.
 - Kullanıcının sorusu varsa özeti o soruya göre odakla.
 - Sadece görselde görünen veya güçlü şekilde anlaşılabilen bilgileri söyle.
-- Gizli düşünme süreci veya taslak yazma; doğrudan nihai okuma/çözüm metnini yaz.
+- Bu metin son kullanıcı cevabı değildir; ana bakım agent'ı bu analiz metniyle dokümanlarda semantic_search yapacaktır.
+- Gizli düşünme süreci veya taslak yazma; doğrudan gözlem/okuma metnini yaz.
 - Cevabına mutlaka "FINAL:" ile başla.
 """
 
@@ -85,7 +86,9 @@ def _clean_vision_summary(raw_content: str, user_message: str) -> str:
                     content=(
                         "Sen vision modelinden gelen ham notu temizleyen bir yardımcı modelsin. "
                         "Sadece görselde görülen/okunan bilgileri Türkçe ve net biçimde aktar. "
-                        "Ham notta bir soru veya çözüm varsa çözüm basamaklarını koru; sadece sonuca indirgeme. "
+                        "Bakım, arıza, güvenlik, temizlik veya prosedür çözümü üretme; "
+                        "ham notta çözüm varsa onu cevap gibi genişletme, yalnızca görseldeki gözleme dönüştür. "
+                        "Bu çıktı son kullanıcı cevabı değil, ana agent'ın dokümanda arama yapması için analiz metnidir. "
                         "Gizli düşünme süreci, taslak, İngilizce açıklama ve iç monolog yazma."
                     )
                 ),
